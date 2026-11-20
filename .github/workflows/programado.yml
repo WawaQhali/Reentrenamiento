@@ -1,0 +1,48 @@
+name: Programado
+
+# Container Apps Jobs no existe en el entorno «express» de la suscripción de estudiante, así
+# que GitHub Actions hace de programador: arranca los Container Instances, que corren y terminan.
+on:
+  schedule:
+    - cron: "17 * * * *" # verificar: cada hora
+    - cron: "40 6 * * 0" # entrenar: domingos 01:40 en Lima
+  workflow_dispatch:
+    inputs:
+      tarea:
+        description: Qué correr
+        type: choice
+        options: [verificar, entrenar]
+        default: verificar
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  arrancar:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Iniciar sesión en Azure (identidad id-wawa-ci)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Arrancar y esperar a que termine
+        env:
+          TAREA: ${{ inputs.tarea || (github.event.schedule == '40 6 * * 0' && 'entrenar' || 'verificar') }}
+        run: |
+          NOMBRE="aci-wawa-$TAREA"
+          ESTADO=$(az container show -g rg-wawaqhali -n "$NOMBRE" --query instanceView.state -o tsv)
+          if [ "$ESTADO" = "Running" ]; then echo "Ya está corriendo"; exit 0; fi
+          az container start -g rg-wawaqhali -n "$NOMBRE" -o none
+          for i in $(seq 1 240); do # hasta 2 horas
+            ESTADO=$(az container show -g rg-wawaqhali -n "$NOMBRE" --query instanceView.state -o tsv)
+            [ "$ESTADO" != "Running" ] && [ "$ESTADO" != "Pending" ] && break
+            sleep 30
+          done
+          az container logs -g rg-wawaqhali -n "$NOMBRE" | tail -40
+          SALIDA=$(az container show -g rg-wawaqhali -n "$NOMBRE" --query "containers[0].instanceView.currentState.exitCode" -o tsv)
+          echo "Estado: $ESTADO, código de salida: $SALIDA"
+          [ "$SALIDA" = "0" ]

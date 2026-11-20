@@ -1,0 +1,74 @@
+name: CD
+
+# Al terminar bien el CI en main: publica la imagen en ACR y recrea los dos Container
+# Instances (verificar y entrenar) con la imagen nueva. Al crearse, cada uno corre una vez.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write # OIDC con Azure: no hay contraseñas guardadas en GitHub
+  contents: read
+
+concurrency:
+  group: cd-reentrenamiento
+  cancel-in-progress: false
+
+env:
+  RG: rg-wawaqhali
+  ACR: acrwawaqxv8s
+  IMAGEN: acrwawaqxv8s.azurecr.io/reentrenamiento
+  LOC: centralus
+  IDENTIDAD: id-wawa-reent
+  BACKEND_URL: https://wawa-backend.salmonforest-a5ba81d5.centralus.azurecontainerapps.io
+  STORAGE_ACCOUNT_URL: https://stwawaqxv8s.blob.core.windows.net
+  KEYVAULT_URL: https://kv-wawa-qxv8s.vault.azure.net/
+
+jobs:
+  desplegar:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Iniciar sesión en Azure (identidad id-wawa-ci)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Construir y publicar la imagen
+        id: imagen
+        run: |
+          TAG="${IMAGEN}:$(git rev-parse --short=12 HEAD)"
+          az acr login --name "$ACR"
+          docker build -t "$TAG" .
+          docker push "$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Recrear los Container Instances
+        env:
+          TAG: ${{ steps.imagen.outputs.tag }}
+        run: |
+          ID_RECURSO=$(az identity show -g "$RG" -n "$IDENTIDAD" --query id -o tsv)
+          ID_CLIENTE=$(az identity show -g "$RG" -n "$IDENTIDAD" --query clientId -o tsv)
+          crear() { # nombre comando cpu memoria
+            az container delete -g "$RG" -n "$1" --yes -o none 2>/dev/null || true
+            az container create -g "$RG" -n "$1" -l "$LOC" --os-type Linux \
+              --image "$TAG" --cpu "$3" --memory "$4" --restart-policy Never \
+              --assign-identity "$ID_RECURSO" --acr-identity "$ID_RECURSO" \
+              --registry-login-server "$ACR.azurecr.io" \
+              --command-line "python -m reentrenamiento $2" \
+              --environment-variables BACKEND_URL="$BACKEND_URL" \
+                STORAGE_ACCOUNT_URL="$STORAGE_ACCOUNT_URL" KEYVAULT_URL="$KEYVAULT_URL" \
+                AZURE_CLIENT_ID="$ID_CLIENTE" CLASES="${{ vars.CLASES || 'compatible,no_compatible' }}" \
+              -o none
+          }
+          crear aci-wawa-verificar verificar 1 2
+          crear aci-wawa-entrenar entrenar 4 8

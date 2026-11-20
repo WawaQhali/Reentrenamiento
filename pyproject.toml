@@ -1,0 +1,46 @@
+[project]
+name = "wawa-qhali-reentrenamiento"
+version = "0.1.0"
+description = "Servicio de reentrenamiento de Wawa Qhali: verifica las donaciones y entrena candidatos"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "azure-identity>=1.19",
+    "azure-keyvault-keys>=4.10",
+    "azure-keyvault-secrets>=4.9",
+    "azure-storage-blob>=12.24",
+    "cryptography>=44",
+    "httpx>=0.28",
+    "numpy>=1.26,<2.2",
+    "opencv-python-headless>=4.10,<5",
+    "pillow>=11",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.8",
+]
+# Solo en la imagen de Docker (Linux): TensorFlow pesa ~600 MB y no hace falta para verificar.
+entrenamiento = [
+    "tensorflow-cpu>=2.18,<2.21; sys_platform == 'linux'",
+]
+
+[tool.uv]
+package = false
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S311"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["entrenamiento: necesita TensorFlow (corre dentro de la imagen de Docker)"]
