@@ -60,15 +60,24 @@ jobs:
           ID_CLIENTE=$(az identity show -g "$RG" -n "$IDENTIDAD" --query clientId -o tsv)
           crear() { # nombre comando cpu memoria
             az container delete -g "$RG" -n "$1" --yes -o none 2>/dev/null || true
-            az container create -g "$RG" -n "$1" -l "$LOC" --os-type Linux \
-              --image "$TAG" --cpu "$3" --memory "$4" --restart-policy Never \
-              --assign-identity "$ID_RECURSO" --acr-identity "$ID_RECURSO" \
-              --registry-login-server "$ACR.azurecr.io" \
-              --command-line "python -m reentrenamiento $2" \
-              --environment-variables BACKEND_URL="$BACKEND_URL" \
-                STORAGE_ACCOUNT_URL="$STORAGE_ACCOUNT_URL" KEYVAULT_URL="$KEYVAULT_URL" \
-                AZURE_CLIENT_ID="$ID_CLIENTE" CLASES="${{ vars.CLASES || 'compatible,no_compatible' }}" \
-              -o none
+            # Azure tarda en soltar la identidad del grupo borrado: si se crea enseguida,
+            # responde «Conflict ... pending delete operation». Por eso se reintenta.
+            for intento in 1 2 3 4 5 6; do
+              if az container create -g "$RG" -n "$1" -l "$LOC" --os-type Linux \
+                --image "$TAG" --cpu "$3" --memory "$4" --restart-policy Never \
+                --assign-identity "$ID_RECURSO" --acr-identity "$ID_RECURSO" \
+                --registry-login-server "$ACR.azurecr.io" \
+                --command-line "python -m reentrenamiento $2" \
+                --environment-variables BACKEND_URL="$BACKEND_URL" \
+                  STORAGE_ACCOUNT_URL="$STORAGE_ACCOUNT_URL" KEYVAULT_URL="$KEYVAULT_URL" \
+                  AZURE_CLIENT_ID="$ID_CLIENTE" CLASES="${{ vars.CLASES || 'compatible,no_compatible' }}" \
+                -o none; then
+                return 0
+              fi
+              echo "No se pudo crear $1 (intento $intento de 6); se reintenta en 30 s."
+              sleep 30
+            done
+            return 1
           }
           crear aci-wawa-verificar verificar 1 2
           crear aci-wawa-entrenar entrenar 4 8
